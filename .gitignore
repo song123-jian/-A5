@@ -1,0 +1,15 @@
+.build-venv/
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+*.bak
+work/
+backups/
+retired/
+docs/HANDOFF.md
+docs/verification-*.json
+docs/功能检测-v*.md
+docs/UI-90分美化方案.md
