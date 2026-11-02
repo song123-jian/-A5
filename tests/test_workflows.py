@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -364,6 +366,108 @@ class TkWorkflowTests(unittest.TestCase):
         self.assertEqual(self.instance._scan_previous_state(), previous)
         self.assertEqual(self.instance.tree.get_children(), rows)
         self.print_backend.assert_not_called()
+
+    def test_copy_count_controls_fit_compact_window(self) -> None:
+        code = """
+import app
+app._enable_windows_dpi_awareness()
+root = app.TkinterDnD.Tk() if app.TkinterDnD is not None else app.tk.Tk()
+instance = app.TicketPrinterApp(root)
+try:
+    root.geometry("980x800+80+80")
+    root.update()
+    bounds = [(w.winfo_rootx() - root.winfo_rootx(), w.winfo_width())
+              for w in instance.special_spin.master.winfo_children()]
+    width = root.winfo_width()
+finally:
+    instance.close_to_tray_var.set(False)
+    instance.on_close()
+assert all(0 <= left < left + size <= width for left, size in bounds), (width, bounds)
+"""
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", "-c", code],
+            cwd=Path(app.__file__).parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_special_invoice_count_updates_live_and_persists(self) -> None:
+        from tests.test_special_vat import invoice_pdf
+        special = invoice_pdf(self.inputs / "special.pdf", "电子发票（增值税专用发票）")
+        self.assertEqual(int(self.instance.special_copies_var.get()), 2)
+        self._import(special, self.single)
+        self._select(special)
+        selected = self.instance.tree.selection()
+        self.assertIn("专票", self.instance.tree.item(selected[0], "values")[0])
+        self.instance.special_spin.delete(0, tk.END)
+        self.instance.special_spin.insert(0, "5")
+        self.root.update()
+        scan = self.instance._active_scan_result()
+        self.assertEqual(self.instance.scan_signature, self.instance._current_signature())
+        self.assertEqual(self.instance.tree.selection(), selected)
+        self.assertEqual([r["copies"] for r in scan["files"] if r.get("special_vat")], [5])
+        self.assertEqual([r["copies"] for r in scan["files"] if not r.get("special_vat")], [1])
+        self.assertEqual(self.instance.jobs_metric_var.get(), "6")
+        self.assertEqual(self.instance.tree.item(selected[0], "values")[3], "5")
+        saved = json.loads(app.SETTINGS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(saved["special_copies"], 5)
+        self.instance.special_copies_var.set("")
+        self.instance._load_settings(None)
+        self.assertEqual(int(self.instance.special_copies_var.get()), 5)
+
+    def test_special_invoice_invalid_count_blocks_print_without_losing_list(self) -> None:
+        from tests.test_special_vat import invoice_pdf
+        special = invoice_pdf(self.inputs / "special.pdf", "增值税专用发票")
+        self._import(special)
+        self._select(special)
+        rows = self.instance.tree.get_children()
+        for raw in ("", "0", "-1", "100", "1.5", "abc"):
+            with self.subTest(raw=raw):
+                self.instance.special_copies_var.set(raw)
+                self.root.update()
+                self.assertEqual(self.instance.tree.get_children(), rows)
+                self.assertTrue(self.instance.selected_print_button.instate(["disabled"]))
+                self.assertEqual(self.instance._active_scan_result()["files"][0]["copies"], 2)
+        self.instance.special_copies_var.set("99")
+        self.root.update()
+        self.assertFalse(self.instance.selected_print_button.instate(["disabled"]))
+        self.assertEqual(self.instance._active_scan_result()["files"][0]["copies"], 99)
+        self.assertEqual(self.callback_errors, [])
+
+    def test_special_invoice_selected_all_and_retry_preserve_counts(self) -> None:
+        from tests.test_special_vat import invoice_pdf
+        special = invoice_pdf(self.inputs / "special.pdf", "增值税电子专用发票")
+        self._import(special, self.single)
+        self.instance.special_copies_var.set("7")
+        self._select(special)
+        self.confirm.return_value = True
+        self.print_backend.side_effect = self._print_success
+        self.instance.selected_print_button.invoke()
+        self._wait()
+        selected = self.print_backend.call_args.args[0]
+        self.assertEqual([r["copies"] for r in selected["files"]], [7])
+        self.assertIn("专票：1", self.confirm.call_args.args[1])
+        self.instance.print_button.invoke()
+        self._wait()
+        printed = self.print_backend.call_args.args[0]
+        self.assertEqual(printed["expected_jobs"], 8)
+        self.instance.special_copies_var.set("9")
+        self._select_latest_history()
+        self.instance.on_retry_history()
+        self._wait()
+        retried = self.print_backend.call_args.args[0]
+        self.assertEqual([r["copies"] for r in retried["files"] if r.get("special_vat")], [7])
+        self.assertEqual([r["copies"] for r in self.instance._active_scan_result()["files"] if r.get("special_vat")], [9])
+
+    def test_special_invoice_folder_scan_uses_custom_count(self) -> None:
+        from tests.test_special_vat import invoice_pdf
+        special = invoice_pdf(self.inputs / "special.pdf", "增值税专用发票")
+        self.instance.special_copies_var.set("3")
+        self.instance.folder_var.set(str(self.inputs))
+        self.instance.scan_button.invoke()
+        self._wait()
+        scan = self.instance._active_scan_result()
+        self.assertEqual([r["copies"] for r in scan["files"] if r["path"] == str(special)], [3])
+        self.error.assert_not_called()
 
     def test_folder_scan_uses_both_copy_counts(self) -> None:
         rail = self._pdf("26329116805001786023.pdf", [(300, 200)])

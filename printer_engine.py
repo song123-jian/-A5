@@ -27,6 +27,8 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 APP_NAME = "打印快捷工具"
 DEFAULT_PRINTER = ""
 RAIL_KEYWORDS = ("铁路电子客票", "铁路客票", "电子客票", "中国铁路", "12306")
+SPECIAL_VAT_TITLES = ("增值税专用发票", "增值税电子专用发票")
+REGULAR_VAT_TITLES = ("增值税普通发票", "增值税电子普通发票", "电子发票（普通发票）")
 NUMERIC_TICKET_NAME = re.compile(r"^\d{20}$")
 AMOUNT_NUMBER = r"(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)"
 ProgressCallback = Callable[[str], None]
@@ -1275,6 +1277,23 @@ def _extract_amount(text: str, rail: bool = False) -> tuple[str | None, str | No
     return f"{value:.2f}", evidence
 
 
+def normalize_special_copies(copies: Any) -> int:
+    raw = str(copies).strip()
+    if not re.fullmatch(r"[0-9]+", raw) or not 1 <= int(raw) <= 99:
+        raise ValueError("专票份数必须是 1 到 99 之间的整数。")
+    return int(raw)
+
+
+def _is_special_vat_invoice(page_texts: list[str]) -> bool:
+    for text in page_texts:
+        compact = "".join(text.split()).replace("(", "（").replace(")", "）")
+        special_positions = [compact.find(title) for title in SPECIAL_VAT_TITLES if title in compact]
+        regular_positions = [compact.find(title) for title in REGULAR_VAT_TITLES if title in compact]
+        if special_positions and (not regular_positions or min(special_positions) < min(regular_positions)):
+            return True
+    return False
+
+
 def _analyze_paths(
     pdfs: list[Path] | tuple[Path, ...],
     zips: list[Path] | tuple[Path, ...],
@@ -1285,7 +1304,9 @@ def _analyze_paths(
     source_type: str = "folder",
     images: list[Path] | tuple[Path, ...] = (),
     on_record: ScanRecordCallback | None = None,
+    special_copies: int = 2,
 ) -> dict[str, Any]:
+    special_copies = normalize_special_copies(special_copies)
     if rail_copies < 1 or other_copies < 1:
         raise ValueError("打印份数必须大于等于 1。")
     pdfs = sorted(
@@ -1374,8 +1395,10 @@ def _analyze_paths(
         compact = "".join("\n".join(page_texts).split())
         matched = [keyword for keyword in RAIL_KEYWORDS if keyword in compact]
         numeric_fallback = NUMERIC_TICKET_NAME.fullmatch(path.stem) is not None
-        rail = bool(matched) or numeric_fallback
+        special_vat = _is_special_vat_invoice(page_texts)
+        rail = not special_vat and (bool(matched) or numeric_fallback)
         reason = (
+            "票面标题：增值税专用发票" if special_vat else
             "票面关键词：" + "、".join(matched)
             if matched
             else ("20 位票号文件名" if numeric_fallback else "未发现铁路票标志")
@@ -1437,7 +1460,8 @@ def _analyze_paths(
                 "sha256": pdf_digest,
                 "pages": len(page_details),
                 "rail": rail,
-                "copies": rail_copies if rail else other_copies,
+                "special_vat": special_vat,
+                "copies": special_copies if special_vat else (rail_copies if rail else other_copies),
                 "classification": reason,
                 "amount": f"{document_amount:.2f}" if document_amount is not None else None,
                 "amount_details": amount_details,
@@ -1480,7 +1504,8 @@ def _analyze_paths(
         "zip_member_excluded_count": len(zip_member_excluded),
         "zip_member_excluded": zip_member_excluded,
         "rail_count": sum(1 for record in records if record["rail"]),
-        "regular_count": sum(1 for record in records if not record["rail"]),
+        "special_vat_count": sum(1 for record in records if record.get("special_vat")),
+        "regular_count": sum(1 for record in records if not record["rail"] and not record.get("special_vat")),
         "source_pages": sum(record["pages"] for record in records),
         "expected_jobs": sum(record["pages"] * record["copies"] for record in records),
         "total_amount": f"{sum(recognized_document_amounts, Decimal('0.00')):.2f}",
@@ -1499,6 +1524,7 @@ def _analyze_paths(
     _progress(
         progress,
         f"扫描完成：PDF {result['pdf_count']}，铁路票 {result['rail_count']}，"
+        f"专票 {result['special_vat_count']}，"
         f"其他 {result['regular_count']}，识别金额 ¥{result['total_amount']}，"
         f"ZIP 内文件跳过 {result['zip_member_excluded_count']}，"
         f"跳过重复 {result['duplicate_skipped_count']}，预计作业 {result['expected_jobs']}。",
@@ -1512,6 +1538,7 @@ def analyze_folder(
     other_copies: int = 1,
     progress: ProgressCallback | None = None,
     on_record: ScanRecordCallback | None = None,
+    special_copies: int = 2,
 ) -> dict[str, Any]:
     root = Path(folder).expanduser().resolve()
     if not root.is_dir():
@@ -1567,6 +1594,7 @@ def analyze_folder(
         source_type="folder",
         images=images,
         on_record=on_record,
+        special_copies=special_copies,
     )
 
 
@@ -1576,6 +1604,7 @@ def analyze_files(
     other_copies: int = 1,
     progress: ProgressCallback | None = None,
     on_record: ScanRecordCallback | None = None,
+    special_copies: int = 2,
 ) -> dict[str, Any]:
     supported: dict[str, Path] = {}
     for value in paths:
@@ -1596,6 +1625,7 @@ def analyze_files(
         source_type="files",
         images=images,
         on_record=on_record,
+        special_copies=special_copies,
     )
 
 
@@ -1665,7 +1695,8 @@ def filter_scan_result(
             "pdf_count": len(records),
             "image_count": sum(1 for record in records if record.get("source_image")),
             "rail_count": sum(1 for record in records if record["rail"]),
-            "regular_count": sum(1 for record in records if not record["rail"]),
+            "special_vat_count": sum(1 for record in records if record.get("special_vat")),
+            "regular_count": sum(1 for record in records if not record["rail"] and not record.get("special_vat")),
             "source_pages": sum(record["pages"] for record in records),
             "expected_jobs": sum(
                 record["pages"] * record["copies"] for record in records

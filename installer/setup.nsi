@@ -22,12 +22,8 @@ CRCCheck on
   !error "Pass /DOUTPUT_FILE=absolute installer path"
 !endif
 
-!ifndef APP_NAME
-  !define APP_NAME "打印快捷工具"
-!endif
-!ifndef APP_ID
-  !define APP_ID "A5TicketPrinter"
-!endif
+!define APP_NAME "打印快捷工具"
+!define APP_ID "A5TicketPrinter"
 !define APP_EXE "打印快捷工具.exe"
 !define PRODUCT_KEY "Software\${APP_ID}"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
@@ -37,8 +33,8 @@ OutFile "${OUTPUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\${APP_ID}"
 InstallDirRegKey HKCU "${PRODUCT_KEY}" "InstallDir"
 BrandingText "${APP_NAME} v${APP_VERSION}"
-!define MUI_ICON "${APP_ICON}"
-!define MUI_UNICON "${APP_ICON}"
+Icon "${APP_ICON}"
+UninstallIcon "${APP_ICON}"
 VIProductVersion "${APP_VERSION}.0"
 VIAddVersionKey /LANG=2052 "ProductName" "${APP_NAME}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${APP_VERSION}"
@@ -49,7 +45,7 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" ""
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "安装 ${APP_NAME} v${APP_VERSION}"
 !define MUI_WELCOMEPAGE_TEXT "安装程序将为当前用户安装打印快捷工具。$\r$\n$\r$\n您可以选择任意有写入权限的文件夹。升级前，请从托盘右键菜单选择“退出程序”。$\r$\n$\r$\n卸载只移除程序和快捷方式，保留用户配置、日志和原始票据。"
-!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择安装文件夹，支持其他磁盘和中文路径；文件夹不存在时会自动创建。安装完成后可在 Windows“已安装的应用”搜索“打印快捷工具”。"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择安装文件夹，支持其他磁盘和中文路径。配置和缓存仍保存在当前用户的本地应用数据目录。"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "运行${APP_NAME}"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
@@ -67,9 +63,6 @@ Section "主程序和开始菜单快捷方式（必选）" MainSection
   SetShellVarContext current
   SetRegView 64
   ClearErrors
-  CreateDirectory "$INSTDIR"
-  IfErrors install_failed
-  ClearErrors
   SetOutPath "$INSTDIR"
   IfErrors install_failed
   SetOverwrite on
@@ -86,18 +79,13 @@ Section "主程序和开始菜单快捷方式（必选）" MainSection
   WriteRegStr HKCU "${PRODUCT_KEY}" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "${APP_NAME}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" '$\"$INSTDIR\${APP_EXE}$\",0'
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '$\"$INSTDIR\卸载.exe$\"'
   WriteRegStr HKCU "${UNINSTALL_KEY}" "QuietUninstallString" '$\"$INSTDIR\卸载.exe$\" /S'
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
-  WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRemove" 0
-  WriteRegDWORD HKCU "${UNINSTALL_KEY}" "SystemComponent" 0
   IfErrors install_failed
-  ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
-  WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallDate" "$2$1$0"
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" $0
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
@@ -115,14 +103,7 @@ SectionEnd
 
 Section "桌面快捷方式" DesktopSection
   SetShellVarContext current
-  ClearErrors
-  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-  IfErrors desktop_failed desktop_done
-desktop_failed:
-  SetErrorLevel 2
-  MessageBox MB_ICONSTOP "程序已安装，但桌面快捷方式创建失败。请检查桌面目录的写入权限；可从开始菜单启动程序。" /SD IDOK
-  Abort
-desktop_done:
+  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 SectionEnd
 
 Function .onInit

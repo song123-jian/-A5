@@ -76,10 +76,6 @@ Write-Host "Installing build dependencies..."
 & $VenvPython -m pip install --disable-pip-version-check --no-input -r (Join-Path $Root "requirements-build.txt")
 if ($LASTEXITCODE -ne 0) { throw "Build dependencies installation failed" }
 
-Write-Host "Generating shared application icon assets..."
-& $VenvPython -X utf8 (Join-Path $Root "app_icon.py")
-if ($LASTEXITCODE -ne 0) { throw "Icon asset generation failed" }
-
 if (-not $SkipTests) {
     Write-Host "Running tests..."
     Push-Location $Root

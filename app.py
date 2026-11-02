@@ -23,7 +23,6 @@ from PIL import Image, ImageTk
 
 import printer_engine as engine
 from _version import BUILD_DATE, VERSION as APP_VERSION
-from app_icon import make_app_icon
 from tray import SystemTray
 
 try:
@@ -141,10 +140,6 @@ class TicketPrinterApp:
     def __init__(self, root: tk.Tk, initial_folder: str | None = None) -> None:
         self.root = root
         self.root.title(f"{engine.APP_NAME}  v{APP_VERSION}")
-        self._window_icons = tuple(
-            ImageTk.PhotoImage(make_app_icon(size), master=root) for size in (32, 64)
-        )
-        self.root.iconphoto(True, *self._window_icons)
         self.root.minsize(980, 800)
         self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
 
@@ -184,6 +179,8 @@ class TicketPrinterApp:
         self.advanced_preset_var = tk.StringVar(value="选择高级规则")
         self.preset_description_var = tk.StringVar()
         self.rail_copies_var = tk.IntVar(value=2)
+        self.special_copies_var = tk.StringVar(value="2")
+        self._last_special_copies = 2
         self.other_copies_var = tk.IntVar(value=1)
         self.copy_count_var = tk.IntVar(value=0)
         self.close_to_tray_var = tk.BooleanVar(value=True)
@@ -508,8 +505,16 @@ class TicketPrinterApp:
             justify=tk.CENTER,
         )
         self.rail_spin.grid(row=0, column=3, padx=(4, 12))
-        ttk.Label(counts_row, text="其他份数：").grid(
+        ttk.Label(counts_row, text="专票份数：").grid(
             row=0, column=4, sticky=tk.W
+        )
+        self.special_spin = ttk.Spinbox(
+            counts_row, from_=1, to=99, width=5,
+            textvariable=self.special_copies_var, justify=tk.CENTER,
+        )
+        self.special_spin.grid(row=0, column=5, padx=(4, 12))
+        ttk.Label(counts_row, text="其他份数：").grid(
+            row=0, column=6, sticky=tk.W
         )
         self.other_spin = ttk.Spinbox(
             counts_row,
@@ -519,9 +524,9 @@ class TicketPrinterApp:
             textvariable=self.other_copies_var,
             justify=tk.CENTER,
         )
-        self.other_spin.grid(row=0, column=5, padx=(4, 12))
+        self.other_spin.grid(row=0, column=7, padx=(4, 12))
         ttk.Label(counts_row, text="复印份数：").grid(
-            row=0, column=6, sticky=tk.W
+            row=1, column=0, sticky=tk.W, pady=(6, 0)
         )
         self.copy_spin = ttk.Spinbox(
             counts_row,
@@ -531,9 +536,9 @@ class TicketPrinterApp:
             textvariable=self.copy_count_var,
             justify=tk.CENTER,
         )
-        self.copy_spin.grid(row=0, column=7, padx=(4, 8), sticky=tk.W)
+        self.copy_spin.grid(row=1, column=1, padx=(4, 8), pady=(6, 0), sticky=tk.W)
         ttk.Label(counts_row, text="0 = 关闭", style="Muted.TLabel").grid(
-            row=0, column=8, sticky=tk.W
+            row=1, column=2, columnspan=2, sticky=tk.W, pady=(6, 0)
         )
         margin_row = ttk.Frame(options, style="Surface.TFrame")
         margin_row.pack(fill=tk.X, pady=(6, 0))
@@ -911,6 +916,7 @@ class TicketPrinterApp:
     def _bind_invalidation(self) -> None:
         self.folder_var.trace_add("write", lambda *_: self._on_folder_changed())
         self.rail_copies_var.trace_add("write", lambda *_: self._invalidate_scan())
+        self.special_copies_var.trace_add("write", lambda *_: self._on_special_copies_changed())
         self.other_copies_var.trace_add("write", lambda *_: self._invalidate_scan())
         self.preset_var.trace_add("write", lambda *_: self._on_preset_changed())
         self.margin_mm_var.trace_add("write", lambda *_: self._refresh_margin_view())
@@ -955,6 +961,11 @@ class TicketPrinterApp:
                 variable.set(max(1, int(settings.get(key, fallback))))
             except (TypeError, ValueError):
                 variable.set(fallback)
+        try:
+            self._last_special_copies = engine.normalize_special_copies(settings.get("special_copies", 2))
+        except ValueError:
+            self._last_special_copies = 2
+        self.special_copies_var.set(str(self._last_special_copies))
         self.copy_count_var.set(0)
         try:
             margin_mm = engine.normalize_margin_mm(settings.get("margin_mm", 0.0))
@@ -986,6 +997,7 @@ class TicketPrinterApp:
             "paper_size": self.paper_var.get(),
             "print_preset": self.preset_var.get(),
             "rail_copies": self._copy_value(self.rail_copies_var, 2),
+            "special_copies": self._special_copy_value() or self._last_special_copies,
             "other_copies": self._copy_value(self.other_copies_var, 1),
             "copy_count": self._validated_copy_count() or 0,
             "close_to_tray": self.close_to_tray_var.get(),
@@ -1117,6 +1129,34 @@ class TicketPrinterApp:
         except (tk.TclError, ValueError):
             return fallback
 
+    def _special_copy_value(self) -> int | None:
+        try:
+            return engine.normalize_special_copies(self.special_copies_var.get())
+        except (ValueError, tk.TclError):
+            return None
+
+    def _on_special_copies_changed(self) -> None:
+        if self.busy:
+            return
+        copies = self._special_copy_value()
+        if copies is not None:
+            self._last_special_copies = copies
+            signature = self._current_signature()
+            if self.scan_result and self.scan_signature and self.scan_signature[:4] == signature[:4]:
+                updated = dict(self.scan_result)
+                updated["files"] = [
+                    {**record, "copies": copies} if record.get("special_vat") else record
+                    for record in self.scan_result["files"]
+                ]
+                self.scan_result = engine.filter_scan_result(updated, set())
+                self.scan_signature = signature
+                self._refresh_scan_view()
+            try:
+                self._save_settings()
+            except OSError as exc:
+                self.log(f"专票份数保存失败：{exc}")
+        self._update_action_states()
+
     def _validated_copy_count(self, raw_value: str | None = None) -> int | None:
         # Read the entry text: IntVar.get() can silently truncate decimals.
         value = (self.copy_spin.get() if raw_value is None else raw_value).strip()
@@ -1177,12 +1217,14 @@ class TicketPrinterApp:
                 self.imported_paths,
                 self._copy_value(self.rail_copies_var, 2),
                 self._copy_value(self.other_copies_var, 1),
+                self._special_copy_value(),
             )
         return (
             "folder",
             str(Path(self.folder_var.get().strip()).expanduser()) if self.folder_var.get().strip() else "",
             self._copy_value(self.rail_copies_var, 2),
             self._copy_value(self.other_copies_var, 1),
+            self._special_copy_value(),
         )
 
     def _invalidate_scan(self) -> None:
@@ -1555,6 +1597,9 @@ class TicketPrinterApp:
     def _start_file_scan(self, paths: object, append: bool = False) -> None:
         if self.busy:
             return
+        if self._special_copy_value() is None:
+            messagebox.showwarning("专票份数无效", "专票份数必须是 1 到 99 之间的整数。", parent=self.root)
+            return
         imported_paths = self._normalize_imported_paths(paths)
         if not imported_paths:
             messagebox.showwarning(
@@ -1581,6 +1626,7 @@ class TicketPrinterApp:
             result = engine.analyze_files(
                 imported_paths, rail_copies=rail_copies,
                 other_copies=other_copies, progress=progress,
+                special_copies=signature[4],
                 on_record=lambda record, index, total: self.events.put(
                     ("scan_record", record, index, total, signature)
                 ),
@@ -1677,6 +1723,7 @@ class TicketPrinterApp:
             return
         rail_copies = self._copy_value(self.rail_copies_var, 2)
         other_copies = self._copy_value(self.other_copies_var, 1)
+        special_copies = self._special_copy_value()
 
         def create_stamped_copy(progress):
             result = engine.stamp_pdf(
@@ -1687,11 +1734,13 @@ class TicketPrinterApp:
             scanned = engine.analyze_files(
                 [result["output_path"]], rail_copies=rail_copies,
                 other_copies=other_copies, progress=progress,
+                special_copies=special_copies,
             )
             result["record"] = scanned["files"][0]
             # A generated filename must not change classification or copy counts.
             for key in ("rail", "copies", "classification"):
                 result["record"][key] = record[key]
+            result["record"]["special_vat"] = bool(record.get("special_vat"))
             return result
 
         self._start_worker(
@@ -1923,6 +1972,9 @@ class TicketPrinterApp:
     def on_scan(self) -> None:
         if self.busy:
             return
+        if self._special_copy_value() is None:
+            messagebox.showwarning("专票份数无效", "专票份数必须是 1 到 99 之间的整数。", parent=self.root)
+            return
         folder = self.folder_var.get().strip()
         if not folder:
             self.on_browse()
@@ -1942,6 +1994,7 @@ class TicketPrinterApp:
                 folder,
                 rail_copies=rail_copies,
                 other_copies=other_copies,
+                special_copies=signature[4],
                 progress=progress,
                 on_record=lambda record, index, total: self.events.put(
                     ("scan_record", record, index, total, signature)
@@ -2010,7 +2063,7 @@ class TicketPrinterApp:
         approved = messagebox.askyesno(
             "确认选择打印",
             f"已选择 PDF：{scan['pdf_count']} 份\n"
-            f"铁路票：{scan['rail_count']} 份；其他 PDF：{scan['regular_count']} 份\n"
+            f"铁路票：{scan['rail_count']} 份；专票：{scan.get('special_vat_count', 0)} 份；其他 PDF：{scan['regular_count']} 份\n"
             f"识别金额：¥{scan['total_amount']}（{scan['amount_recognized_count']}/{scan['pdf_count']} 份已识别）\n"
             "未识别金额的 PDF 也会按当前选择打印。\n"
             f"预计打印作业：{expected_jobs} 个（按当前份数设置）\n"
@@ -2070,7 +2123,7 @@ class TicketPrinterApp:
             f"文件夹：{scan['folder']}\n"
             f"PDF：{scan['pdf_count']} 份\n"
             f"{zip_note}"
-            f"铁路票：{scan['rail_count']} 份；其他 PDF：{scan['regular_count']} 份\n"
+            f"铁路票：{scan['rail_count']} 份；专票：{scan.get('special_vat_count', 0)} 份；其他 PDF：{scan['regular_count']} 份\n"
             f"识别金额：¥{scan['total_amount']}（{scan['amount_recognized_count']}/{scan['pdf_count']} 份已识别）\n"
             "未识别金额的 PDF 也会打印。\n"
             f"预计打印作业：{expected_jobs} 个\n"
@@ -2822,6 +2875,8 @@ class TicketPrinterApp:
         options = {
             "text": record["name"],
             "values": (
+                ("ZIP 内专票" if record.get("source_archive") else "增值税专票")
+                if record.get("special_vat") else
                 "ZIP 内 PDF" if record.get("source_archive") else (
                     "图片" if record.get("source_image") else (
                         "铁路票" if record["rail"] else "其他 PDF"
@@ -3021,6 +3076,7 @@ class TicketPrinterApp:
             self.select_all_button,
             self.folder_entry,
             self.rail_spin,
+            self.special_spin,
             self.other_spin,
             self.copy_spin,
         ):
@@ -3056,11 +3112,12 @@ class TicketPrinterApp:
             return
         result = self._active_scan_result()
         has_files = bool(result and result["files"])
+        valid_copies = self._special_copy_value() is not None
         self.calibration_button.configure(state=tk.NORMAL)
         if hasattr(self, "history_button"):
             self.history_button.configure(state=tk.NORMAL)
-        self.print_button.configure(state=tk.NORMAL if has_files else tk.DISABLED)
-        self.validate_button.configure(state=tk.NORMAL if has_files else tk.DISABLED)
+        self.print_button.configure(state=tk.NORMAL if has_files and valid_copies else tk.DISABLED)
+        self.validate_button.configure(state=tk.NORMAL if has_files and valid_copies else tk.DISABLED)
         if hasattr(self, "export_pdf_button"):
             self.export_pdf_button.configure(state=tk.NORMAL if has_files else tk.DISABLED)
         if hasattr(self, "preview_button"):
@@ -3068,11 +3125,11 @@ class TicketPrinterApp:
         selected_count = len(self.tree.selection()) if has_files else 0
         has_selection = selected_count > 0
         self.selected_print_button.configure(
-            state=tk.NORMAL if has_selection else tk.DISABLED
+            state=tk.NORMAL if has_selection and valid_copies else tk.DISABLED
         )
         self.copy_button.configure(
             state=tk.NORMAL
-            if has_selection and self._validated_copy_count(copy_count_text) is not None
+            if has_selection and valid_copies and self._validated_copy_count(copy_count_text) is not None
             else tk.DISABLED
         )
         if hasattr(self, "stamp_button"):

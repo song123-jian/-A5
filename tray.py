@@ -4,9 +4,7 @@ import os
 import threading
 from collections.abc import Callable
 
-from PIL import Image
-
-from app_icon import make_app_icon
+from PIL import Image, ImageDraw
 
 try:
     import pystray
@@ -109,4 +107,12 @@ class SystemTray:
 
     @staticmethod
     def _make_image() -> Image.Image:
-        return make_app_icon(64)
+        image = Image.new("RGBA", (64, 64), (30, 90, 232, 255))
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((10, 18, 54, 48), radius=6, fill=(255, 255, 255, 255))
+        draw.rectangle((18, 10, 46, 29), fill=(255, 255, 255, 255))
+        draw.rectangle((20, 14, 44, 23), fill=(30, 90, 232, 255))
+        draw.rectangle((18, 38, 46, 54), fill=(30, 90, 232, 255))
+        draw.rectangle((24, 41, 40, 49), fill=(255, 255, 255, 255))
+        draw.ellipse((14, 28, 20, 34), fill=(30, 90, 232, 255))
+        return image
